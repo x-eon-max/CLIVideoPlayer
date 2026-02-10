@@ -69,23 +69,16 @@ class VideoPlayer:
 def process_frame_vectorized(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         ascii_indices = (gray * (len(ASCII_CHARS) - 1) // 255).astype(np.uint8)
-        
         diff = frame[:, :, np.newaxis, :] - COLORS_REF[np.newaxis, np.newaxis, :, :]
         dists_sq = np.sum(diff**2, axis=3)
         color_indices = np.argmin(dists_sq, axis=2)
-        
         mapped_chars = ASCII_CHARS[ascii_indices]
         mapped_colors = ANSI_COLORS_BYTES[color_indices]
-        
         char_bytes = np.char.encode(mapped_chars, 'utf-8')
-        
         pixels = np.char.add(mapped_colors, char_bytes)
-        
         rows = [b"".join(row) for row in pixels]
-        
-        # On joint toutes les lignes avec un saut de ligne
         return b"\n".join(rows) + ANSI_RESET
-
+    
     def play(self):
         fps, total_frames = self.get_video_info()
         
@@ -156,4 +149,5 @@ if __name__ == "__main__":
     else:
         player = VideoPlayer("video.mp4", "audio.mp3", width=120)
         player.play()
+
 
