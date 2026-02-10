@@ -4,105 +4,153 @@ import pygame
 from pygame import mixer
 import time
 import os
-from functools import lru_cache
+import sys
+import threading
+from queue import Queue
 
-ANSI_COLORS = [
-    "\033[30m", "\033[31m", "\033[32m", "\033[33m",
-    "\033[34m", "\033[35m", "\033[36m", "\033[37m",
-]
+VIDEO_PATH = "video.mp4"
+AUDIO_PATH = "audio.mp3"
+WIDTH = 120
+QUEUE_SIZE = 64
 
-ASCII_CHARS = " ░▒▓█"
-ASCII_CHARS_LEN = len(ASCII_CHARS) - 1
-COLORS_REF = np.array([(0,0,0), (0,0,255), (0,255,0), (0,255,255), 
-                       (255,0,0), (255,0,255), (255,255,0), (255,255,255)])
+ANSI_RESET = b"\033[0m"
+ANSI_HOME = b"\033[H"
+ANSI_HIDE_CURSOR = b"\033[?25l"
+ANSI_SHOW_CURSOR = b"\033[?25h"
 
-TARGET_FPS = 30  # Set your desired FPS cap here
-FRAME_TIME = 1.0 / TARGET_FPS
-MAX_FRAME_SKIP = 10  # Maximum number of frames to skip when lagging
+ANSI_COLORS_BYTES = np.array([
+    b"\033[30m", b"\033[34m", b"\033[32m", b"\033[36m",
+    b"\033[31m", b"\033[35m", b"\033[33m", b"\033[37m"
+])
 
-@lru_cache(maxsize=512)
-def get_ansi_color_cached(b, g, r):
-    distances = np.sqrt(np.sum((COLORS_REF - np.array([b, g, r]))**2, axis=1))
-    return ANSI_COLORS[np.argmin(distances)]
+ASCII_CHARS = np.array(list(" ░▒▓█"))
+COLORS_REF = np.array([
+    (0, 0, 0), (255, 0, 0), (0, 255, 0), (255, 255, 0),
+    (0, 0, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255)
+], dtype=np.int16)
 
-def resize_frame(frame, new_width=100):
-    height, width = frame.shape[:2]
-    aspect_ratio = height/width
-    new_height = int(new_width * aspect_ratio * 0.55)
-    return cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
+class VideoPlayer:
+    def __init__(self, video_path, audio_path, width):
+        self.video_path = video_path
+        self.audio_path = audio_path
+        self.width = width
+        self.running = False
+        self.frame_queue = Queue(maxsize=QUEUE_SIZE)
+        
+    def get_video_info(self):
+        cap = cv2.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            raise FileNotFoundError(f"Impossible d'ouvrir {self.video_path}")
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        return fps, total_frames
 
-@lru_cache(maxsize=1024)
-def process_pixel(b, g, r, char):
-    color_code = get_ansi_color_cached(int(b), int(g), int(r))
-    return color_code + char
-
-def frame_to_ascii(frame):
-    resized = resize_frame(frame)
-    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-    ascii_indices = (gray / 255 * ASCII_CHARS_LEN).astype(int)
-    ascii_chars = np.array(list(ASCII_CHARS))[ascii_indices]
-    
-    return '\n'.join(''.join(process_pixel(b, g, r, char) 
-                    for (b, g, r), char in zip(row, chars_row))
-                    for row, chars_row in zip(resized, ascii_chars)) + "\033[0m"
-
-def main():
-    video_path = "video.mp4"
-    cap = cv2.VideoCapture(video_path)
-    
-    if not cap.isOpened():
-        print("Error: Could not open video file")
-        return
-
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
-    
-    pygame.init()
-    mixer.init()
-    mixer.music.load("audio.mp3")
-    
-    os.system('cls' if os.name == 'nt' else 'clear')
-    print("\033[?25l")  # Hide cursor
-    
-    mixer.music.play()
-    next_frame_time = time.time()
-    frames_behind = 0
-    
-    try:
-        while True:
-            current_time = time.time()
-            
-            if current_time < next_frame_time:
-                time.sleep(0.001)
+    def frame_reader(self):
+        cap = cv2.VideoCapture(self.video_path)
+        while self.running:
+            if self.frame_queue.full():
+                time.sleep(0.01)
                 continue
-            
-            # Calculate how many frames we're behind
-            frames_behind = int((current_time - next_frame_time) / FRAME_TIME)
-            
-            # Skip frames if we're falling behind
-            if frames_behind > 1:
-                frames_to_skip = min(frames_behind - 1, MAX_FRAME_SKIP)
-                for _ in range(frames_to_skip):
-                    cap.read()
-                next_frame_time += FRAME_TIME * frames_to_skip
             
             ret, frame = cap.read()
             if not ret:
+                self.running = False
                 break
             
-            ascii_frame = frame_to_ascii(frame)
-            print(f"\033[H{ascii_frame}", flush=True)
+            h, w = frame.shape[:2]
+            aspect_ratio = h / w
+            new_height = int(self.width * aspect_ratio * 0.55)
+            resized = cv2.resize(frame, (self.width, new_height), interpolation=cv2.INTER_NEAREST)
             
-            next_frame_time += FRAME_TIME
-            
-            # Reset timing if we're too far behind
-            if frames_behind > MAX_FRAME_SKIP:
-                next_frame_time = current_time + FRAME_TIME
-    
-    finally:
-        print("\033[?25h")  # Show cursor
+            self.frame_queue.put(resized)
         cap.release()
-        mixer.music.stop()
-        pygame.quit()
+
+    def process_frame_vectorized(self, frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        ascii_indices = (gray * (len(ASCII_CHARS) - 1) // 255).astype(np.uint8)
+        
+        diff = frame[:, :, np.newaxis, :] - COLORS_REF[np.newaxis, np.newaxis, :, :]
+        dists_sq = np.sum(diff**2, axis=3)
+        color_indices = np.argmin(dists_sq, axis=2)
+        
+        mapped_chars = ASCII_CHARS[ascii_indices]
+        mapped_colors = ANSI_COLORS_BYTES[color_indices]
+        
+        newlines = np.full((frame.shape[0], 1), b'\n')
+        char_bytes = np.char.encode(mapped_chars, 'utf-8')
+        pixels = np.char.add(mapped_colors, char_bytes)
+        lines = np.char.add(np.sum(pixels, axis=1)[:, np.newaxis], newlines)
+        
+        return b"".join(lines.flatten()) + ANSI_RESET
+
+    def play(self):
+        fps, total_frames = self.get_video_info()
+        
+        pygame.mixer.init()
+        try:
+            pygame.mixer.music.load(self.audio_path)
+        except Exception as e:
+            return
+
+        self.running = True
+        reader_thread = threading.Thread(target=self.frame_reader)
+        reader_thread.daemon = True
+        reader_thread.start()
+
+        while self.frame_queue.qsize() < min(QUEUE_SIZE, 10) and self.running:
+            time.sleep(0.01)
+
+        os.system('cls' if os.name == 'nt' else 'clear')
+        sys.stdout.buffer.write(ANSI_HIDE_CURSOR)
+        
+        pygame.mixer.music.play()
+        start_time = time.time()
+        
+        try:
+            current_frame_idx = 0
+            
+            while self.running and (pygame.mixer.music.get_busy() or not self.frame_queue.empty()):
+                audio_time = pygame.mixer.music.get_pos() / 1000.0
+                
+                if audio_time < 0: 
+                    audio_time = time.time() - start_time
+
+                target_frame_idx = int(audio_time * fps)
+                
+                if current_frame_idx < target_frame_idx:
+                    frames_to_skip = target_frame_idx - current_frame_idx
+                    for _ in range(frames_to_skip):
+                        if not self.frame_queue.empty():
+                            _ = self.frame_queue.get()
+                            current_frame_idx += 1
+                
+                elif current_frame_idx > target_frame_idx:
+                    time.sleep(0.001)
+                    continue
+
+                if not self.frame_queue.empty():
+                    frame = self.frame_queue.get()
+                    current_frame_idx += 1
+                    
+                    ascii_art = self.process_frame_vectorized(frame)
+                    
+                    sys.stdout.buffer.write(ANSI_HOME + ascii_art)
+                    sys.stdout.buffer.flush()
+                else:
+                    time.sleep(0.001)
+
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.running = False
+            reader_thread.join()
+            sys.stdout.buffer.write(ANSI_SHOW_CURSOR + ANSI_RESET)
+            pygame.mixer.quit()
 
 if __name__ == "__main__":
-    main()
+    if not os.path.exists("video.mp4") or not os.path.exists("audio.mp3"):
+        print("Erreur: Place 'video.mp4' et 'audio.mp3' dans le dossier.")
+    else:
+        player = VideoPlayer("video.mp4", "audio.mp3", width=120)
+        player.play()
