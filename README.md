@@ -45,8 +45,7 @@ The script requires the video and audio to be in separate files (this avoids the
 Run the script from your terminal:
 
 ```bash
-python main.py
-
+python Player.py
 ```
 
 *Note: For the best experience, zoom out your terminal (Ctrl + Scroll) or reduce the font size to fit the width.*

@@ -27,7 +27,7 @@ ASCII_CHARS = np.array(list(" ░▒▓█"))
 COLORS_REF = np.array([
     (0, 0, 0), (255, 0, 0), (0, 255, 0), (255, 255, 0),
     (0, 0, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255)
-], dtype=np.int16)
+], dtype=np.int32)
 
 class VideoPlayer:
     def __init__(self, video_path, audio_path, width):
@@ -66,7 +66,7 @@ class VideoPlayer:
             self.frame_queue.put(resized)
         cap.release()
         
-def process_frame_vectorized(self, frame):
+    def process_frame_vectorized(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         ascii_indices = (gray * (len(ASCII_CHARS) - 1) // 255).astype(np.uint8)
         diff = frame[:, :, np.newaxis, :] - COLORS_REF[np.newaxis, np.newaxis, :, :]
