@@ -1,83 +1,156 @@
-# 🚀 High-Performance ASCII Video Player
+# 🎬 High-Performance CLI Video Player (v3.0)
 
-> A blazing fast, multi-threaded terminal video player written in Python. It converts video frames to colored ASCII art in real-time with perfect audio synchronization.
+> A blazing fast, multi-threaded terminal video player written in Python. Converts video frames to colored ASCII art in real-time with automatic audio extraction, high-precision synchronization, interactive menus, and playback controls.
+
+---
 
 ## ✨ Features
 
-* **⚡ Zero-Loop Rendering:** Uses **NumPy vectorization** and broadcasting to map pixels to ASCII/ANSI colors. No Python loops are used for pixel processing, ensuring high FPS.
-* **🧵 Multi-threaded Decoding:** Video frames are read and resized in a background thread to prevent I/O blocking.
-* **🎵 Perfect Audio Sync:** Frames are synchronized to the audio timestamp (Pygame Mixer) rather than the system clock, ensuring lip-sync accuracy even if the CPU lags.
-* **🚀 Raw Buffer Output:** Writes bytes directly to `stdout` buffer for maximum throughput.
+* **⚡ Ultra-Fast Vectorized Engine (>1500 FPS):** Employs precomputed **3D Lookup Tables (LUT)** and combo-token indexing to map pixels to ANSI colors and ASCII glyphs with zero python-level pixel loops.
+* **📂 Interactive Video Selector:** Automatically scans current and user directories for video files (`.mp4`, `.mkv`, `.webm`, `.avi`, `.mov`, etc.), displaying resolution, framerate, duration, and file size. Supports custom paths and drag-and-drop.
+* **📐 Standard Resolution Presets:** Choose from known standard resolutions or auto-fit dynamically:
+  * **Auto** (Fits current terminal window preserving aspect ratio without vertical scrolling)
+  * **Compact** (80 cols — Classic terminal standard)
+  * **Medium** (100 cols)
+  * **Standard** (120 cols — Default)
+  * **HD** (160 cols — High detail)
+  * **Full HD** (200 cols — Ultra detail)
+  * **Ultra HD** (240 cols — Extreme widescreen)
+  * **Custom** (Enter any arbitrary width)
+* **⏱️ Framerate Selector & Downsampling:** Play videos at **Native FPS**, **15 FPS** (low CPU / SSH), **24 FPS** (cinematic), **30 FPS**, **60 FPS**, or **Custom FPS** with hardware-accelerated demuxer stride skipping (`cap.grab()`).
+* **🎨 5 Color Rendering Modes:**
+  * `ansi16` : 16 ANSI Colors (8 Standard + 8 Bright) via 3D LUT — vibrant and ultra-fast (~1500 FPS) *(Recommended)*
+  * `256` : 256 Colors using extended xterm color cube (~1700 FPS)
+  * `ansi8` : 8 Classic Retro ANSI Colors via bitwise quantization (~2000 FPS)
+  * `gray` : Monochrome ASCII Art with brightness ramp (~4000 FPS)
+  * `truecolor` : Full 24-bit RGB TrueColor
+* **🎵 Automatic Audio Extraction & Lip-Sync:** Automatically extracts the audio track using `ffmpeg` on-the-fly and synchronizes playback against the Pygame mixer clock. Plays smoothly in silent mode if no audio track exists.
+* **🎮 Live Playback Controls:**
+  * `[SPACE]` : Pause / Resume (with instant audio pause/unpause)
+  * `[R]` : Restart video from beginning
+  * `[M]` : Mute / Unmute audio
+  * `[H]` : Toggle real-time HUD status line
+  * `[Q]` / `[ESC]` : Clean quit and terminal restoration
+* **🧵 Parallel Multi-threaded Pipeline:** Background worker threads decode, resize, and convert frames to ASCII bytes ahead of time, ensuring the display loop has zero latency or jitter.
+* **🐛 Bug Fixes & Stability:**
+  * Fixed critical syntax/indentation error from v2.0.1.
+  * Fixed signed 16-bit integer overflow in color distance computation (`diff**2` wrapping negative).
+  * Fixed channel mismatch between OpenCV BGR and ANSI color mapping.
+  * Added automated temp file cleanup (`atexit`) and terminal state restoration.
 
-## 🛠️ Prerequisites
+---
 
-You need **Python 3** and the following libraries:
+## 🛠️ Prerequisites & Installation
+
+### 1. Python Dependencies
 
 ```bash
-pip install opencv-python numpy pygame
-
+git clone https://github.com/x-eon-max/CLIVideoPlayer.git
+cd CLIVideoPlayer
+pip install -r requirements.txt
 ```
 
-## 📂 Setup
+*(Dependencies: `opencv-python`, `numpy`, `pygame`)*
 
-1. **Clone the repository** (or download the script).
-2. **Prepare your media files**:
-The script requires the video and audio to be in separate files (this avoids the overhead of decoding audio from the video container in real-time).
-* Place your video file as `video.mp4`.
-* Place your audio file as `audio.mp3`.
+### 2. FFmpeg (Recommended)
 
+To enable automatic audio extraction directly from video containers:
 
-> **Tip:** You can extract audio from a video using FFmpeg:
+* **Arch Linux / Manjaro:** `sudo pacman -S ffmpeg`
+* **Debian / Ubuntu:** `sudo apt install ffmpeg`
+* **macOS:** `brew install ffmpeg`
+* **Windows:** `winget install Gyan.FFmpeg` or download from [ffmpeg.org](https://ffmpeg.org/)
 
+*(If FFmpeg is not installed, the player will still play videos smoothly in silent mode or with manually provided audio files).*
 
-> ```bash
-> ffmpeg -i input.mp4 -q:a 0 -map a audio.mp3
-> mv input.mp4 video.mp4
-> 
-> ```
-> 
-> 
-
-
+---
 
 ## 🚀 Usage
 
-Run the script from your terminal:
+### 1. Interactive Mode (Wizard)
+
+Simply launch the player without arguments:
 
 ```bash
 python Player.py
 ```
 
-*Note: For the best experience, zoom out your terminal (Ctrl + Scroll) or reduce the font size to fit the width.*
+The interactive menu will guide you step-by-step:
+1. **Select Video File** (detected videos listed with size, fps, duration)
+2. **Select Display Resolution** (presets + auto-detect)
+3. **Select Framerate** (native, 15, 24, 30, 60, or custom)
+4. **Select Color Palette** (16 ANSI, 256, 8 ANSI, Grayscale, TrueColor)
 
-## ⚙️ Configuration
+### 2. Command Line Arguments (Direct Mode)
 
-You can tweak the constants at the top of the `main.py` file:
+Play any video directly with custom settings:
 
-```python
-WIDTH = 120       # Width of the ASCII output (in characters)
-QUEUE_SIZE = 64   # Frame buffer size
+```bash
+# Play video with default settings (120 cols, 16 ANSI colors, auto audio)
+python Player.py my_video.mp4
 
+# Auto-fit to terminal window at 30 FPS in 256-color mode
+python Player.py my_video.mp4 -w auto -f 30 -c 256
+
+# High Definition 160 cols with custom audio track
+python Player.py my_video.mp4 -w 160 -a audio.mp3
+
+# Low-resource mode (80 cols, 15 FPS, monochrome grayscale)
+python Player.py my_video.mp4 -w 80 -f 15 -c gray --no-audio
 ```
 
-## 🧠 How it works (The Optimization)
+### CLI Options
 
-Unlike standard ASCII converters that iterate over every pixel (`for x in width...`), this engine uses **NumPy** to process the entire image matrix at once:
-
-1. **Grayscale & Resize:** OpenCV handles the heavy lifting.
-2. **Vectorized Mapping:** * Calculates Euclidean distance between every pixel and the ANSI color palette in a single matrix operation.
-* Maps luminance to ASCII characters using array indexing.
-
-
-3. **Broadcasting:** Combines the ANSI color codes and ASCII characters into a single byte stream.
-
-## 📝 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
+| Argument | Shorthand | Description |
+| :--- | :--- | :--- |
+| `video` | — | Path to video file (launches interactive selector if omitted) |
+| `--width` | `-w` | Display resolution (`auto`, `80`, `100`, `120`, `160`, `200`, `240`, or custom integer) |
+| `--fps` | `-f` | Playback framerate in FPS (`15`, `24`, `30`, `60`, or native) |
+| `--color` | `-c` | Color palette (`ansi16`, `256`, `ansi8`, `gray`, `truecolor`) |
+| `--audio` | `-a` | Path to separate audio file (auto-extracted if omitted) |
+| `--no-audio` | — | Disable audio playback entirely |
+| `--no-hud` | — | Hide the bottom status / progress bar |
 
 ---
 
-### 💡 Tips for best performance
+## 🎮 Keyboard Controls
 
-* Use a terminal with GPU acceleration (like **Alacritty**, **Windows Terminal**, or **iTerm2**).
-* Avoid using the default CMD on old Windows versions; PowerShell or Git Bash is recommended.
+During playback, use the following keys in your terminal:
+
+| Key | Action |
+| :---: | :--- |
+| **`[SPACE]`** | **Pause / Resume** playback |
+| **`[R]`** | **Restart** video from the beginning |
+| **`[M]`** | **Mute / Unmute** audio |
+| **`[H]`** | **Toggle HUD** status overlay |
+| **`[Q]`** / **`[ESC]`** | **Quit** and restore terminal cursor & colors |
+
+---
+
+## 🧠 Technical Architecture & Optimizations
+
+### 1. Vectorized Combo LUT Acceleration
+Previous versions iterated or broadcasted high-dimensional matrices across Euclidean color distances, allocating massive temporary arrays on every frame (~17 ms per frame).
+
+In **v3.0**:
+- **16-Color ANSI Engine:** Uses a precalculated 3D lookup table $(32 \times 32 \times 32)$ mapping $(B \gg 3, G \gg 3, R \gg 3)$ to palette indices in $\approx 0.05\text{ ms}$.
+- **Combo Token Table:** Pre-generates combined ANSI color escape bytes and UTF-8 characters into a single flat array. Pixel bytes are assembled directly in memory without per-character allocations, achieving **$\approx 0.6\text{ ms}$ total frame rendering time ($>1,500\text{ FPS}$)**.
+
+### 2. Multi-threaded Background Queue
+Video decoding and ASCII rendering run in a dedicated background worker thread (`Queue(maxsize=64)`). The main display thread only handles timer pacing and non-blocking terminal I/O, guaranteeing butter-smooth playback without UI stutter.
+
+### 3. Dynamic Terminal Fitting
+In `auto` mode, the player queries `shutil.get_terminal_size()`, computes the font aspect-ratio correction factor ($0.55$), and automatically clamps lines to fit within the visible terminal viewport, preventing flickering and unwanted scrollbar jitter.
+
+---
+
+## 💡 Tips for Best Experience
+
+* **Terminal Emulator:** For maximum framerate and lowest latency, use a GPU-accelerated terminal like **Alacritty**, **Kitty**, **Windows Terminal**, **WezTerm**, or **iTerm2**.
+* **Font Size:** Zoom out slightly (`Ctrl` + `-` or `Ctrl` + Scroll) to accommodate larger resolutions like 160 or 200 columns.
+
+---
+
+## 📝 License
+
+Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
