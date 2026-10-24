@@ -3,6 +3,10 @@ import numpy as np
 import os
 import sys
 import time
+import shutil
+import tempfile
+import atexit
+import subprocess
 import threading
 from queue import Queue
 
@@ -22,6 +26,44 @@ ANSI_SHOW_CURSOR = b"\033[?25h"
 
 ASCII_CHARS = np.array(list(" ░▒▓█"))
 ASCII_CHARS_BYTES = [c.encode("utf-8") for c in ASCII_CHARS]
+
+_temp_audio_files = []
+
+def cleanup_temp_files():
+    """Remove any extracted temporary audio files."""
+    for path in _temp_audio_files:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+atexit.register(cleanup_temp_files)
+
+
+def extract_audio(video_path: str) -> str | None:
+    """Extract audio track from video to temporary WAV file using ffmpeg."""
+    if not shutil.which("ffmpeg") or not os.path.exists(video_path):
+        return None
+    try:
+        temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        temp_path = temp_file.name
+        temp_file.close()
+        _temp_audio_files.append(temp_path)
+        cmd = [
+            "ffmpeg", "-y", "-v", "error",
+            "-i", video_path,
+            "-vn", "-ac", "2", "-ar", "44100",
+            temp_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if res.returncode == 0 and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+            return temp_path
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return None
+    except Exception:
+        return None
 
 
 class ANSI16Renderer:
@@ -147,14 +189,24 @@ def get_renderer(mode: str):
 
 
 class VideoPlayer:
-    def __init__(self, video_path: str, audio_path: str = None, width: int = DEFAULT_WIDTH, color_mode: str = "ansi16"):
+    def __init__(self, video_path: str, audio_path: str = None, width: int = DEFAULT_WIDTH, color_mode: str = "ansi16", enable_audio: bool = True):
         self.video_path = video_path
-        self.audio_path = audio_path
         self.width = width
         self.color_mode = color_mode
         self.renderer = get_renderer(color_mode)
         self.running = False
         self.frame_queue = Queue(maxsize=QUEUE_SIZE)
+        self.has_audio = False
+        self.audio_path = audio_path
+
+        if enable_audio:
+            if self.audio_path and os.path.exists(self.audio_path):
+                self.has_audio = True
+            else:
+                extracted = extract_audio(self.video_path)
+                if extracted and os.path.exists(extracted):
+                    self.audio_path = extracted
+                    self.has_audio = True
         
     def get_video_info(self):
         cap = cv2.VideoCapture(self.video_path)
@@ -187,15 +239,13 @@ class VideoPlayer:
     
     def play(self):
         fps, total_frames = self.get_video_info()
-        has_audio = False
         
-        if self.audio_path and os.path.exists(self.audio_path):
+        if self.has_audio and self.audio_path and os.path.exists(self.audio_path):
             try:
                 pygame.mixer.init()
                 pygame.mixer.music.load(self.audio_path)
-                has_audio = True
             except Exception:
-                has_audio = False
+                self.has_audio = False
 
         self.running = True
         reader_thread = threading.Thread(target=self.frame_reader, daemon=True)
@@ -209,15 +259,15 @@ class VideoPlayer:
         sys.stdout.buffer.write(ANSI_HIDE_CURSOR)
         sys.stdout.buffer.flush()
         
-        if has_audio:
+        if self.has_audio:
             pygame.mixer.music.play()
         start_time = time.perf_counter()
         
         try:
             current_frame_idx = 0
             
-            while self.running and (not self.frame_queue.empty() or (has_audio and pygame.mixer.music.get_busy())):
-                if has_audio and pygame.mixer.music.get_busy():
+            while self.running and (not self.frame_queue.empty() or (self.has_audio and pygame.mixer.music.get_busy())):
+                if self.has_audio and pygame.mixer.music.get_busy():
                     audio_time = pygame.mixer.music.get_pos() / 1000.0
                     if audio_time < 0:
                         audio_time = time.perf_counter() - start_time
@@ -252,7 +302,7 @@ class VideoPlayer:
             reader_thread.join(timeout=1.0)
             sys.stdout.buffer.write(ANSI_SHOW_CURSOR + ANSI_RESET + b"\n")
             sys.stdout.buffer.flush()
-            if has_audio:
+            if self.has_audio:
                 try:
                     pygame.mixer.quit()
                 except Exception:
